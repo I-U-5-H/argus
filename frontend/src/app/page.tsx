@@ -2,7 +2,6 @@
 
 import React, { useEffect, useState, useRef } from "react";
 
-// Types for incoming backend WebSocket data
 interface TelemetryData {
   status: "NOMINAL" | "CRITICAL";
   event_spikes: number;
@@ -11,56 +10,76 @@ interface TelemetryData {
   compute_power: string;
 }
 
+interface ContractorData {
+  fleet_id: string;
+  driver_name: string;
+  current_safety_score: string;
+  recommendation: string;
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<TelemetryData>({
     status: "NOMINAL",
     event_spikes: 0,
     membrane_potential: 0.0,
-    threshold: 3.0, // Default threshold based on your backend configurations
+    threshold: 3.0,
     compute_power: "NOMINAL",
   });
 
   const [history, setHistory] = useState<number[]>(Array(40).fill(0));
+  
+  const [liveScore, setLiveScore] = useState("100%");
+  const [liveRec, setLiveRec] = useState("MONITORING ACTIVE");
+
+  const [inputName, setInputName] = useState("");
+  const [inputFleet, setInputFleet] = useState("");
+  const [isJourneyStarted, setIsJourneyStarted] = useState(false);
+
   const audioCtxRef = useRef<AudioContext | null>(null);
   const oscillatorRef = useRef<OscillatorNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
 
-  // 1. WebSocket Telemetry Connection
+  const fetchContractorScore = () => {
+    fetch('http://localhost:8000/contractor/score')
+      .then(res => res.json())
+      .then((resData: ContractorData) => {
+        setLiveScore(resData.current_safety_score);
+        setLiveRec(resData.recommendation);
+      })
+      .catch(err => console.error(err));
+  };
+
   useEffect(() => {
     const socket = new WebSocket("ws://localhost:8000/telemetry");
 
     socket.onmessage = (event) => {
       const incoming = JSON.parse(event.data);
-
-      // Merge incoming data with existing data to prevent undefined values
       setData((prev) => ({ ...prev, ...incoming }));
-
-      // Fallback to 0 if event_spikes is missing
       setHistory((prev) => [...prev.slice(1), incoming.event_spikes || 0]);
     };
 
     return () => socket.close();
   }, []);
 
-  // 2. Self-Contained Web Audio Engine (Plays ONLY when state is CRITICAL)
+  useEffect(() => {
+    if (isJourneyStarted) {
+      fetchContractorScore();
+    }
+  }, [data.status, isJourneyStarted]);
+
   useEffect(() => {
     if (data.status === "CRITICAL") {
-      // Initialize Audio Context if it doesn't exist
       if (!audioCtxRef.current) {
         audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       }
 
       if (!oscillatorRef.current) {
         const ctx = audioCtxRef.current;
-
-        // Create an oscillator for a high-intensity alarm tone
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
 
         osc.type = "sawtooth";
-        osc.frequency.setValueAtTime(880, ctx.currentTime); // 880Hz alert frequency
-
-        // Pulsing modulation effect for the alarm
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
         gain.gain.setValueAtTime(0.15, ctx.currentTime);
 
         osc.connect(gain);
@@ -71,7 +90,6 @@ export default function Dashboard() {
         gainNodeRef.current = gain;
       }
     } else {
-      // Instantly terminate sound generation the exact moment eyes open
       if (oscillatorRef.current) {
         try {
           oscillatorRef.current.stop();
@@ -93,11 +111,15 @@ export default function Dashboard() {
     };
   }, [data.status]);
 
-  // SAFETIES: Ensure we never try to do math on an undefined variable
-  const safeMembrane = data.membrane_potential || 0;
-  const safeThreshold = data.threshold || 1; // Prevent division by zero
+  const handleStartJourney = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputName || !inputFleet) return;
+    setIsJourneyStarted(true);
+  };
 
-  // Calculate threshold percentage for our visual membrane progress indicator
+  const safeMembrane = data.membrane_potential || 0;
+  const safeThreshold = data.threshold || 1;
+
   const thresholdPercentage = Math.min(
     (safeMembrane / safeThreshold) * 100,
     100
@@ -106,7 +128,6 @@ export default function Dashboard() {
   return (
     <main className="min-h-screen bg-[#050505] text-white font-mono flex flex-col items-center justify-center p-6 relative overflow-hidden">
 
-      {/* Cyber Grid Background Aesthetic */}
       <div
         className="absolute inset-0 opacity-[0.03] pointer-events-none"
         style={{
@@ -115,10 +136,8 @@ export default function Dashboard() {
         }}
       />
 
-      {/* Main Container Dashboard Frame */}
       <div className="w-full max-w-4xl bg-[#0a0a0a] border border-[#1a1a1a] rounded-xl p-8 shadow-2xl relative z-10">
 
-        {/* Dynamic Alert Banner Area */}
         <div className="mb-8 relative">
           <div className="text-center text-xs tracking-[0.3em] text-[#555] mb-2 uppercase">
             Neural Guard Status
@@ -136,16 +155,51 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Dashboard Instrumentation Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        {!isJourneyStarted ? (
+          <div className="w-full bg-[#0e0e0e] border border-[#161616] p-6 rounded-xl mb-6">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-amber-500 block mb-4">
+              📋 Initialize Contractor Dispatch Log
+            </span>
+            <form onSubmit={handleStartJourney} className="flex flex-col sm:flex-row gap-4 items-end">
+              <div className="flex-1 w-full">
+                <label className="text-[10px] text-[#555] uppercase block mb-1">Driver Name</label>
+                <input 
+                  type="text" 
+                  value={inputName}
+                  onChange={(e) => setInputName(e.target.value)}
+                  placeholder="e.g. Satish Kumar"
+                  className="w-full bg-[#141414] border border-[#222] rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-green-500 transition-all"
+                  required
+                />
+              </div>
+              <div className="flex-1 w-full">
+                <label className="text-[10px] text-[#555] uppercase block mb-1">Fleet Node ID</label>
+                <input 
+                  type="text" 
+                  value={inputFleet}
+                  onChange={(e) => setInputFleet(e.target.value)}
+                  placeholder="e.g. FLEET-MAC-01"
+                  className="w-full bg-[#141414] border border-[#222] rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-green-500 transition-all"
+                  required
+                />
+              </div>
+              <button 
+                type="submit"
+                className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-black font-bold text-xs uppercase px-6 py-2.5 rounded h-[38px] tracking-wider transition-all"
+              >
+                Start Journey
+              </button>
+            </form>
+          </div>
+        ) : null}
 
-          {/* Component 1: Enlarged Spikes Activity Graph */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+
           <div className="bg-[#0e0e0e] border border-[#161616] rounded-xl p-6 flex flex-col h-[200px]">
             <div className="text-xs text-[#666] tracking-wider uppercase mb-4">
               Event Spikes / Real-Time Activity
             </div>
 
-            {/* Expanded Visualization Area */}
             <div className="flex-1 flex items-end gap-[3px] w-full pt-4">
               {history.map((val, idx) => {
                 const heightPercent = Math.min((val / 500) * 100, 100);
@@ -161,7 +215,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Component 2: LIF Neuron Membrane Metrics with Threshold Progress Indicator */}
           <div className="bg-[#0e0e0e] border border-[#161616] rounded-xl p-6 flex flex-col justify-between h-[200px]">
             <div>
               <div className="text-xs text-[#666] tracking-wider uppercase mb-2">
@@ -173,7 +226,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Threshold Progress Bar Upgrade */}
             <div className="w-full my-3">
               <div className="flex justify-between text-[10px] text-[#444] mb-1 tracking-wider uppercase">
                 <span>Charge State</span>
@@ -199,7 +251,35 @@ export default function Dashboard() {
 
         </div>
 
-        {/* Enterprise Telemetry Badge */}
+        <div className="w-full bg-[#0e0e0e] border border-[#161616] p-5 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4 mb-6">
+          <div className="text-left w-full sm:w-auto">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-green-400 block mb-1">
+              🛡️ B2B Contractor Management Layer
+            </span>
+            <h2 className="text-sm font-light text-zinc-300">
+              Driver: <span className="text-white font-medium">{isJourneyStarted ? inputName : "AWAITING INPUT"}</span> | ID: {isJourneyStarted ? inputFleet : "NOT SET"}
+            </h2>
+          </div>
+
+          <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto border-t sm:border-t-0 border-[#1c1c1c] pt-3 sm:pt-0">
+            <div className="text-right">
+              <span className="text-[10px] text-[#555] block uppercase tracking-wider">Safety Index</span>
+              <span className="text-2xl font-bold font-mono text-green-400">
+                {isJourneyStarted ? liveScore : "100%"}
+              </span>
+            </div>
+
+            <div className="bg-[#141414] border border-[#222] px-4 py-2 rounded-lg text-center min-w-[150px]">
+              <span className="text-[9px] text-[#555] uppercase tracking-widest block mb-0.5">Fleet Action Memo</span>
+              <span className={`text-[10px] font-bold uppercase font-mono ${
+                liveRec.includes("WARNING") ? "text-red-400 animate-pulse" : "text-green-400"
+              }`}>
+                {isJourneyStarted ? liveRec : "READY"}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <div className="flex justify-end">
           <div className="flex items-center space-x-2 bg-[#0e0e0e] border border-[#161616] px-3 py-1.5 rounded-full text-[11px]">
             <span className="relative flex h-2 w-2">
