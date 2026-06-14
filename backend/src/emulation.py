@@ -34,3 +34,12 @@ class WebcamEmulator:
 
     def release(self):
         self.cap.release()
+
+if __name__ == "__main__":
+    import time
+    print("Running your friend's original code... Press Ctrl+C to stop.")
+    emulator = WebcamEmulator()
+    while True:
+        frame, count = emulator.get_spikes()
+        print(f"Spike Count: {count}")
+        time.sleep(0.1)
